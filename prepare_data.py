@@ -168,8 +168,6 @@ def warp_all_images(images, depth, refPos):
 
 
 def rgb2gray(rgb):
-    if torch.is_tensor(rgb):
-        rgb = rgb.cpu().numpy()
     return np.dot(rgb[..., :3], [0.299, 0.587, 0.114])
 
 
@@ -241,6 +239,10 @@ def prepare_color_features(depth, images, refPos):
     indNan = isnan(warpedImages)
     warpedImages[indNan] = 0
     [h, w, _, _] = depth.shape
+    if not torch.is_tensor(refPos):
+        refPos = torch.from_numpy(refPos)
+        if param.useGPU:
+            refPos = refPos.cuda().float()
     refPos = refPos.view(2, 1, 1, -1)
     colorFeatures = torch.cat((depth, warpedImages, (refPos[0, :, :, :] - 1.5).repeat(h, w, 1, 1),
                                (refPos[1, :, :, :] - 1.5).repeat(h, w, 1, 1)), 2)

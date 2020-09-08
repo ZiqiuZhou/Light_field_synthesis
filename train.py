@@ -146,7 +146,9 @@ def evaluate_system(depth_net, color_net, depth_optimizer=None, color_optimizer=
         print("----------------")
         print("Extracting depth features...", end='   ')
         dfTime = time.time()
-        inputView.Y, inputView.X = torch.from_numpy(inputView.Y).cuda(), torch.from_numpy(inputView.X).cuda()
+        refPos = refPos.cpu().numpy()
+        images = images.cpu().numpy()
+
         deltaY = inputView.Y - refPos[0]
         deltaX = inputView.X - refPos[1]
         depthFeatures = prepare_depth_features(images, deltaY, deltaX, disparity)
