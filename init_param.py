@@ -19,7 +19,7 @@ def get_folder_content(folderPath):
 
 param = type('', (), {})() # using type() to create class object
 
-param.depthResolution = 40  # number of depth levels (see Eq. 5)
+param.depthResolution = 45  # number of depth levels (see Eq. 5)
 param.numDepthFeatureChannels = param.depthResolution * 2
 #param.deltaDisparity = 21  # the range of disparities (see Eq. 5)
 param.origAngRes = 8  # original angular resolution
@@ -46,8 +46,8 @@ param.useGPU = torch.cuda.is_available()
 
 ################## Training Parameters #################################
 
-param.height = 256
-param.width = 256
+param.height = 250
+param.width = 400
 
 param.patchSize = 60
 param.stride = 16
@@ -70,9 +70,9 @@ param.trainNet = 'TrainingData'
 
 param.isContinue = False
 param.startIter = 0
-param.totalIter = 5#500
+param.totalIter = 2500
 
-param.testNetIter = 2#500
+param.testNetIter = 100
 param.printInfoIter = 1
 
 ### ADAM parameters

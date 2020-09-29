@@ -78,11 +78,11 @@ def synthesize_novel_views(depth_net, color_net, inputLF, fullLF, resultPath, de
 
 def test():
     # Initialization
-    sceneFolder = './Scenes'
-    resultFolder = './Results'
+    sceneFolder = './Test_GT'
+    resultFolder = './Test_Synthesis'
 
     # load the pre-trained networks
-    [depth_net, color_net, _, _] = load_networks()
+    [depth_net, color_net, _, _, _, _] = load_networks()
 
     # Generate novel views for each scene
     [sceneNames, scenePaths, numScenes] = get_folder_content(sceneFolder)

@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.autograd import Variable
 
-from model import DepthNetModel, ColorNetModel
+from model import DepthNetModel, ColorNetModel, VAE
 from prepare_data import *
 
 warnings.filterwarnings("ignore")
@@ -22,14 +22,17 @@ param.isContinue = opt.is_continue
 def load_networks(isTraining=False):
     depth_net = DepthNetModel()
     color_net = ColorNetModel()
+    d_net = VAE()
     if param.useGPU:
         depth_net.cuda()
         color_net.cuda()
+        d_net.cuda()
 
     depth_optimizer = optim.Adam(depth_net.parameters(), lr=param.alpha, betas=(param.beta1, param.beta2),
                                  eps=param.eps)
     color_optimizer = optim.Adam(color_net.parameters(), lr=param.alpha, betas=(param.beta1, param.beta2),
                                  eps=param.eps)
+    d_optimizer = optim.Adam(d_net.parameters())
 
     if isTraining:
         netFolder = param.trainNet # 'TrainingData'
@@ -38,14 +41,16 @@ def load_networks(isTraining=False):
         for target in sorted(netName):
             if target[-4:] == '.tar':
                 net.append(target)
-        if param.isContinue and netName:
+        if param.isContinue and net:
             tokens = net[0].split('-')[1].split('.')[0]
             param.startIter = int(tokens)
             checkpoint = torch.load(netFolder + '/' + net[0])
             depth_net.load_state_dict(checkpoint['depth_net'])
             color_net.load_state_dict(checkpoint['color_net'])
+            d_net.load_state_dict(checkpoint['d_net'])
             depth_optimizer.load_state_dict(checkpoint['depth_optimizer'])
             color_optimizer.load_state_dict(checkpoint['color_optimizer'])
+            d_optimizer.load_state_dict(checkpoint['d_optimizer'])
         else:
             param.isContinue = False
 
@@ -59,10 +64,12 @@ def load_networks(isTraining=False):
         checkpoint = torch.load(netFolder + '/' + net[0])
         depth_net.load_state_dict(checkpoint['depth_net'])
         color_net.load_state_dict(checkpoint['color_net'])
+        d_net.load_state_dict(checkpoint['d_net'])
         depth_optimizer.load_state_dict(checkpoint['depth_optimizer'])
         color_optimizer.load_state_dict(checkpoint['color_optimizer'])
+        d_optimizer.load_state_dict(checkpoint['d_optimizer'])
 
-    return depth_net, color_net, depth_optimizer, color_optimizer
+    return depth_net, color_net, d_net, depth_optimizer, color_optimizer, d_optimizer
 
 
 def read_training_data(fileName, isTraining, it=0):
@@ -137,8 +144,8 @@ def prepare_color_features_grad(depth, images, refPos, curFeatures, indNan, dzdx
     return dzdx
 
 
-def evaluate_system(depth_net, color_net, depth_optimizer=None, color_optimizer=None, criterion=None, images=None,
-                    refPos=None, isTraining=False, depthFeatures=None, reference=None,
+def evaluate_system(depth_net, color_net, d_net=None, depth_optimizer=None, color_optimizer=None, d_optimizer=None,
+                    criterion=None, images=None, refPos=None, isTraining=False, depthFeatures=None, reference=None,
                     isTestDuringTraining=False, disparity=None):
     # Estimating the depth (section 3.1)
     if not isTraining:
@@ -229,7 +236,7 @@ def compute_psnr(input, ref):
     return errEst
 
 
-def test_during_training(depth_net, color_net, depth_optimizer, color_optimizer, criterion):
+def test_during_training(depth_net, color_net, d_net, depth_optimizer, color_optimizer, d_optimizer, criterion):
     sceneNames = []
     for target in sorted(param.testNames):
         if target[-3:] == '.h5':
@@ -243,9 +250,8 @@ def test_during_training(depth_net, color_net, depth_optimizer, color_optimizer,
         # read input data
         images, depthFeatures, reference, refPos = read_training_data(sceneNames[k], False)
         # evaluate the network and accumulate error
-        finalImg = evaluate_system(depth_net, color_net, depth_optimizer, color_optimizer, criterion, images, refPos,
-                                   True,
-                                   depthFeatures, reference, True)
+        finalImg = evaluate_system(depth_net, color_net, d_net, depth_optimizer, color_optimizer, d_optimizer,
+                                   criterion, images, refPos, True, depthFeatures, reference, True)
 
         finalImg = crop_img(finalImg, 10)
         reference = crop_img(reference, 10)
@@ -271,10 +277,11 @@ def get_test_error(errorFolder):
     return testError
 
 
-def train_system(depth_net, color_net, depth_optimizer, color_optimizer, criterion):
+def train_system(depth_net, color_net, d_net, depth_optimizer, color_optimizer, d_optimizer, criterion):
     testError = get_test_error(param.trainNet)
     it = param.startIter + 1
 
+    best_error = 0
     while it < param.totalIter:
         if it % param.printInfoIter == 0:
             print('Performing iteration {}'.format(it))
@@ -283,9 +290,8 @@ def train_system(depth_net, color_net, depth_optimizer, color_optimizer, criteri
         depth_net.train(True)  # Set model to training mode
         color_net.train(True)
         images, depthFeat, reference, refPos = read_training_data(param.trainingData + '/training.h5', True, it)
-        evaluate_system(depth_net, color_net, depth_optimizer, color_optimizer, criterion, images, refPos, True,
-                        depthFeat,
-                        reference, False)
+        evaluate_system(depth_net, color_net, d_net, depth_optimizer, color_optimizer, d_optimizer, criterion,
+                        images, refPos, True, depthFeat, reference, False)
 
         if it % param.testNetIter == 0:
             # save network
@@ -297,20 +303,25 @@ def train_system(depth_net, color_net, depth_optimizer, color_optimizer, criteri
             state = {
                 'depth_net': depth_net.state_dict(),
                 'color_net': color_net.state_dict(),
+                'd_net': d_net.state_dict(),
                 'depth_optimizer': depth_optimizer.state_dict(),
-                'color_optimizer': color_optimizer.state_dict()
+                'color_optimizer': color_optimizer.state_dict(),
+                'd_optimizer': d_optimizer.state_dict()
             }
             torch.save(state, param.trainNet + '/Net-' + str(it) + '.tar')
 
-            # delete network
-            if curNet:
-                os.remove(curNet[0])
             # perform validation
             depth_net.train(False)  # Set model to validation mode
             color_net.train(False)
             print('Starting the validation process... ', end='', flush=True)
-            curError = test_during_training(depth_net, color_net, depth_optimizer, color_optimizer, criterion)
+            curError = test_during_training(depth_net, color_net, d_net, depth_optimizer, color_optimizer, d_optimizer,
+                                            criterion)
             testError.append(curError)
+            if curError > best_error:
+                best_error = curError
+                # delete network
+                if curNet:
+                    os.remove(curNet[0])
             plt.plot(testError)
             plt.title('Current PSNR: %f' % curError)
             plt.savefig(param.trainNet + '/fig.png')
@@ -335,11 +346,11 @@ def pairwise_distance(x1, x2, p=2, eps=1e-6):
 
 
 def train():
-    [depth_net, color_net, depth_optimizer, color_optimizer] = load_networks(True)
+    [depth_net, color_net, d_net, depth_optimizer, color_optimizer, d_optimizer] = load_networks(True)
     criterion = PairwiseDistance()
     if param.useGPU:
         criterion.cuda()
-    train_system(depth_net, color_net, depth_optimizer, color_optimizer, criterion)
+    train_system(depth_net, color_net, d_net, depth_optimizer, color_optimizer, d_optimizer, generator_criterion)
 
 
 if __name__ == "__main__":

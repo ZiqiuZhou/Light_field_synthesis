@@ -172,56 +172,48 @@ def rgb2gray(rgb):
 
 
 def prepare_depth_features(inputLF, deltaY, deltaX, disparity):
-    """
-    计算某个reference新视角的深度信息
-    :param inputLF: 4个顶点视角，size: 512 * 512 * 3 * 2 * 2
-    :param deltaY: 视角差.Y, dim:4, range:[0, 1]
-    :param deltaX: 视角差.X, dim:4, range:[0, 1]
-    :return: 200 通道 feature vectors: 512 * 512 * 200
-    """
-    depthResolution = param.depthResolution  # 100
-    deltaDisparity = disparity
+    depthResolution = param.depthResolution
+    deltaDisparity = 21
     # convert the input rgb light field to grayscale
     (height, width, _, angHeight, angWidth) = inputLF.shape
-    grayLF = np.zeros((height, width, angHeight, angWidth)) # 转灰植图
+    grayLF = np.zeros((height, width, angHeight, angWidth))
     for i in range(0, angHeight):
         for j in range(0, angWidth):
             grayLF[:, :, i, j] = rgb2gray(inputLF[:, :, :, i, j])
 
     defocusStack = np.zeros((height, width, depthResolution))
     correspStack = np.zeros((height, width, depthResolution))
-    featuresStack = np.zeros((height, width, 2 * depthResolution)) # output feature大小
-    delta = deltaDisparity[1] - deltaDisparity[0] / (depthResolution - 1)
+    featuresStack = np.zeros((height, width, 90))
+    delta = 2 * deltaDisparity / (depthResolution - 1)
     indDepth = 0
 
-    # 100 个 curDepth
-    for curDepth in np.arange(deltaDisparity[0], deltaDisparity[1] + delta, delta):
-        shearedLF = np.zeros((height, width, angHeight * angWidth)) # size: 512 * 512 * 4,是 Eq.5的等号左边
+    for curDepth in np.arange(- deltaDisparity, deltaDisparity + delta, delta):
+        shearedLF = np.zeros((height, width, angHeight * angWidth))
         X = np.arange(0, width)
         Y = np.arange(0, height)
 
         # backward warping all the input images using each depth level (see Eq. 5)
-        # curDepth代表d, deltaY[indView]代表p - q, [Y, X]代表像素位置s
+
         indView = 0
         for iax in range(0, angWidth):
             for iay in range(0, angHeight):
-                curY = Y + curDepth * deltaY[indView] # deltaY[indView]是reference与当前输入视角(4个中1个)的视差
+                curY = Y + curDepth * deltaY[indView]
                 curX = X + curDepth * deltaX[indView]
                 ip = interp2d(X, Y, grayLF[:, :, iay, iax], kind='cubic', fill_value=np.nan)
                 shearedLF[:, :, indView] = ip(curX, curY)
                 indView = indView + 1
+        # computing the final mean and variance features for depth level using Eq. 6
 
-        # computing the final mean and variance features for depth level using Eq. 6, 对每个depth level(100个)计算
         defocusStack[:, :, indDepth] = defocus_response(shearedLF)
         correspStack[:, :, indDepth] = corresp_response(shearedLF)
 
         if (indDepth + 1) % 10 == 0:
-            print('\b\b\b%d%%' % ((indDepth + 1) / depthResolution * depthResolution), end='', flush=True)
+            print('\b\b\b%d%%' % ((indDepth + 1) / depthResolution * 100), end='', flush=True)
 
         indDepth = indDepth + 1
 
-    featuresStack[:, :, 0: depthResolution] = defocusStack.astype('float32')
-    featuresStack[:, :, depthResolution: 2 * depthResolution] = correspStack.astype('float32')
+    featuresStack[:, :, 0: 45] = defocusStack.astype('float32')
+    featuresStack[:, :, 45: 90] = correspStack.astype('float32')
     return featuresStack
 
 
@@ -258,8 +250,8 @@ def read_illum_images(scenePath):
     """
     读取某一个场景图，生成9 * 9个视差图并截取中间8 * 8个
     """
-    numImgsX = 9
-    numImgsY = 9
+    numImgsX = 8
+    numImgsY = 8
     h = param.height
     w = param.width
     fullLF = np.zeros((h, w, 3, numImgsY, numImgsX), dtype=np.float) # 512 * 512 * 3 * 9 * 9
@@ -276,11 +268,22 @@ def read_illum_images(scenePath):
         inputImg = cv2.imread(path, -cv2.IMREAD_ANYDEPTH) # 512 * 512 * 3
         inputImg = cv2.cvtColor(inputImg, cv2.COLOR_BGR2RGB)  # BGR to RGB
         inputImg = im2double(inputImg)  # normalize
-        inputImg = resize_img(inputImg, h, w)# 裁剪至256 * 256
-        curIdx_Y, curIdx_X = np.unravel_index(int(input[-5]), [numImgsY, numImgsX], 'F')
+        inputImg = resize_img(inputImg, 250, 400)# 裁剪至256 * 256
+        if(int(input[-6]) != 0):
+            index = int(input[-6] + input[-5])
+        else:
+            index = int(input[-5])
+        curIdx_Y, curIdx_X = np.unravel_index(index, [numImgsY, numImgsX], 'C')
         fullLF[:, :, :, curIdx_Y, curIdx_X] = inputImg
-
-    fullLF = fullLF[:, :, :, 1:9, 1:9] # 挑选9 * 9 中的中间8 * 8 个, 512 * 512 * 3 * 9 * 9
+        h = inputImg.shape[0] // numImgsY
+        w = inputImg.shape[1]
+        """
+        if h == 375 and w == 540:
+            fullLF = np.pad(fullLF, ((0, 1), (0, 1), (0, 0), (0, 0), (0, 0)), mode='constant', constant_values=0)
+        if h == 375 and w == 541:
+            fullLF = np.pad(fullLF, ((0, 1), (0, 0), (0, 0), (0, 0), (0, 0)), mode='constant', constant_values=0)
+        """
+    #fullLF = fullLF[:, :, :, 1:9, 1:9] # 挑选9 * 9 中的中间8 * 8 个, 512 * 512 * 3 * 9 * 9
     inputLF = fullLF[:, :, :, 0:8:7, 0:8:7] # 挑选8 * 8 中的4个角, 512 * 512 * 3 * 2 * 2
     return fullLF, inputLF, deltaDisparity
 
@@ -433,7 +436,9 @@ def prepare_training_data():
     firstBatch = True
     make_dir(outputFolder)
 
+    #shuffle_index = np.random.permutation(numScenes)
     for ns in range(0, numScenes): # numScenes: 20
+        #idx = shuffle_index[ns]
         print('**********************************')
         print('Working on the "%s" dataset (%d of %d)' % (sceneNames[ns], ns + 1, numScenes), flush=True)
 
